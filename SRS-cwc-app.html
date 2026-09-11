@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SRS - cwc-app</title>
+  <style>
+    body{font-family:Segoe UI,Helvetica,Arial,sans-serif;line-height:1.45;padding:24px;color:#111}
+    h1,h2,h3{color:#0b3b61}
+    pre{background:#f6f8fa;padding:12px;border-radius:6px;overflow:auto}
+    .section{margin-bottom:18px}
+    ul{margin-left:1.2rem}
+    table{border-collapse:collapse}
+    code{background:#eef;padding:2px 4px;border-radius:4px}
+  </style>
+  <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({startOnLoad:true});</script>
+</head>
+<body>
+  <h1>SRS — cwc-app</h1>
+  <p><strong>Date:</strong> 2026-05-22</p>
+
+  <div class="section">
+    <h2>Overview</h2>
+    <p><strong>Purpose</strong>: <em>cwc-app</em> is a Laravel-based dashboard for CCTV/IOT monitoring (camera health, alerts, CO2/PH3, sack-counting, FRS).</p>
+    <p><strong>Key files referenced</strong>:
+      <ul>
+        <li>routes/web.php</li>
+        <li>routes/api.php</li>
+        <li>app/Http/Controllers/Api/DashboardApiController.php</li>
+        <li>app/Services/DashboardService.php</li>
+        <li>app/Http/Controllers/IotDropdownController.php</li>
+        <li>app/Http/Controllers/SackController.php</li>
+        <li>app/Http/Controllers/CameraController.php</li>
+        <li>app/Models/User.php</li>
+        <li>config/external-apis.php</li>
+      </ul>
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>Actors / Roles</h2>
+    <ul>
+      <li>SuperAdmin</li>
+      <li>Admin</li>
+      <li>Region Officer (RO)</li>
+      <li>Warehouse Officer (WO)</li>
+      <li>Authenticated User</li>
+      <li>External APIs</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Functional Requirements (summary)</h2>
+    <ul>
+      <li>Dashboard: aggregated stats</li>
+      <li>Camera network: region → warehouses, warehouse details</li>
+      <li>Alerts: CO2/PH3 + fire/smoke/rodent reporting</li>
+      <li>Sack counting: region summary & logs</li>
+      <li>FRS: unknown-person counts</li>
+      <li>CRUD: Regions, Warehouses, Users (RBAC)</li>
+      <li>Theme toggle, profile management</li>
+      <li>Caching and manual refresh endpoint</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>API Reference (high level)</h2>
+    <ul>
+      <li><strong>GET</strong> /api/dashboard/stats — returns aggregated stats (supports region, warehouse, days)</li>
+      <li><strong>POST</strong> /api/dashboard/refresh — force refresh</li>
+      <li><strong>GET</strong> /api/warehouses?region= — returns warehouses by region</li>
+      <li><strong>GET</strong> /cameras/region/{region}/warehouses — AJAX warehouses list</li>
+      <li><strong>GET</strong> /cameras/{region}/{warehouse}/details — warehouse details view</li>
+      <li><strong>GET</strong> /api/sack/region-summary — sack region summary (cached)</li>
+      <li>IoT dropdowns: /iot/sack/regions, /iot/sack/warehouses, /iot/frs/regions, /iot/frs/warehouses</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Diagrams</h2>
+    <h3>Use Case Diagram</h3>
+    <div class="mermaid">
+actor SuperAdmin
+actor Admin
+actor RegionOfficer
+actor WarehouseOfficer
+actor AuthenticatedUser
+actor ExternalAPI
+
+usecase UC_Dash as "View Dashboard\n(aggregate stats)"
+usecase UC_Refresh as "Refresh Dashboard\n(force refresh)"
+usecase UC_RegionWH as "List Region Warehouses\n(AJAX)"
+usecase UC_WHDetails as "View Warehouse Details"
+usecase UC_Alerts as "View & Filter Alerts"
+usecase UC_SackSummary as "View Sack Region Summary"
+usecase UC_FRS as "Fetch FRS Regions/Warehouses"
+usecase UC_ManageUsers as "Manage Users (CRUD)"
+usecase UC_ManageMasters as "Manage Regions/Warehouses"
+
+SuperAdmin --> UC_Dash
+SuperAdmin --> UC_Refresh
+SuperAdmin --> UC_ManageUsers
+SuperAdmin --> UC_ManageMasters
+
+Admin --> UC_Dash
+Admin --> UC_Alerts
+Admin --> UC_SackSummary
+
+RegionOfficer --> UC_Dash
+RegionOfficer --> UC_RegionWH
+RegionOfficer --> UC_WHDetails
+RegionOfficer --> UC_Alerts
+RegionOfficer --> UC_SackSummary
+
+WarehouseOfficer --> UC_Dash
+WarehouseOfficer --> UC_WHDetails
+WarehouseOfficer --> UC_Alerts
+
+AuthenticatedUser --> UC_Dash
+AuthenticatedUser --> UC_FRS
+
+ExternalAPI ..> UC_Dash
+ExternalAPI ..> UC_RegionWH
+ExternalAPI ..> UC_WHDetails
+ExternalAPI ..> UC_SackSummary
+ExternalAPI ..> UC_FRS
+    </div>
+
+    <h3>Sequence: Dashboard stats retrieval</h3>
+    <div class="mermaid">
+sequenceDiagram
+Browser->>App: GET /api/dashboard/stats?region=&warehouse=&days=
+App->>Service: getStats()
+Service->>Cache: remember('dashboard_stats')
+alt cache hit
+Cache-->>Service: cachedData
+else cache miss
+par ParallelRequests
+    Service->>API_Cam: GET camera_summary
+    Service->>API_Alert: GET alert_dashboard
+    Service->>API_Sack: GET sack_count
+    Service->>API_FRS: GET frs_unknown
+    Service->>API_CO2: GET co2_summary
+end
+Service->>NMS: fetchCameraHealthMap()
+Service-->>Cache: store dashboard_stats
+end
+Service-->>App: data (filtered if query present)
+App-->>Browser: 200 JSON { success:true, data: { ... }, filters:{...} }
+    </div>
+
+    <h3>Sequence: Get warehouses by region (AJAX)</h3>
+    <div class="mermaid">
+sequenceDiagram
+Browser->>App: GET /cameras/region/{region}/warehouses (AJAX)
+App->>API_Backend: GET camera_by_warehouse (external)
+API_Backend-->>App: JSON { data: [...] }
+App->>App: filter items by region, map fields (nvr_ip, totals)
+App-->>Browser: 200 JSON { success:true, region, warehouses:[...] }
+    </div>
+
+    <h3>Sequence: Warehouse details</h3>
+    <div class="mermaid">
+sequenceDiagram
+Browser->>App: GET /cameras/{region}/{warehouse}/details
+App->>API_Search: GET camera_warehouse_search?q={warehouse}
+API_Search-->>App: JSON { success:true, data:{warehouses:[...]} }
+App->>App: aggregate NVRs, compute totals & uptime
+App-->>Browser: Render view `cameras.warehouse_details` (data + nvrs)
+    </div>
+
+    <h3>Sequence: Sack region summary</h3>
+    <div class="mermaid">
+sequenceDiagram
+Browser->>App: GET /api/sack/region-summary
+App->>Cache: remember('sack_region_count')
+alt cache hit
+Cache-->>App: data
+else
+App->>SackAPI: GET sack_region_count
+SackAPI-->>App: JSON array
+App->>App: dedupe by region, sum totals, sort
+App->>Cache: store result (300s)
+end
+App-->>Browser: 200 JSON { success:true, data:[...] }
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Acceptance Criteria (selected)</h2>
+    <h3>Dashboard — View Aggregated Stats</h3>
+    <ul>
+      <li>GIVEN: authenticated user with <code>permission:view_dashboard</code>
+        <ul>
+          <li>WHEN: GET <code>/api/dashboard/stats</code></li>
+          <li>THEN: respond 200 with <code>success:true</code> and <code>data</code> (camera totals, alerts, co2/ph3, sack, frs, regionData, mapData).</li>
+        </ul>
+      </li>
+      <li>Filtering by <code>region</code>/<code>warehouse</code> recalculates totals and mapData.</li>
+      <li>On exception return 500 with <code>success:false</code> and a message.</li>
+    </ul>
+
+    <h3>Region → Warehouses (AJAX)</h3>
+    <p>GIVEN authenticated user, GET <code>/cameras/region/{region}/warehouses</code> returns JSON with warehouses array and count; items filtered by region case-insensitively.</p>
+
+    <h3>Sack Region Summary</h3>
+    <p>GET <code>/api/sack/region-summary</code> returns deduplicated region totals cached for 300s; on failure returns <code>success:false</code> and empty data.</p>
+  </div>
+
+  <div class="section">
+    <h2>How to get a PDF</h2>
+    <ol>
+      <li>Open <strong>SRS-cwc-app.html</strong> in your browser (double-click or use `http-server`).</li>
+      <li>Use Print → Save as PDF (recommended).</li>
+      <li>Or install <code>pandoc</code> and run:
+        <pre>pandoc SRS-cwc-app.md -o SRS-cwc-app.pdf --from markdown --pdf-engine=wkhtmltopdf</pre>
+      </li>
+    </ol>
+  </div>
+
+  <footer>
+    <p>Generated from repository files on 2026-05-22.</p>
+  </footer>
+</body>
+</html>

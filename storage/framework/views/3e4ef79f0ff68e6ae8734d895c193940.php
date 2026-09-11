@@ -1,0 +1,1 @@
+<?php /**PATH D:\xampp\htdocs\ATS\vss\resources\views\dashboard.blade.php ENDPATH**/ ?>
