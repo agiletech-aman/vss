@@ -159,13 +159,6 @@ class GasAlertController extends Controller
             'showNormal'   => $request->boolean('showNormal') ? 1 : null,
         ];
 
-        $selectedAlertType = strtolower(trim((string) $request->get('alertType')));
-        $totalForMeta = in_array($selectedAlertType, ['normal', 'severe', 'critical'], true)
-            ? $alertService->reliableTotalCount($filters, $selectedAlertType)
-            : $alertService->reliableTotalCount($filters, 'normal')
-                + $alertService->reliableTotalCount($filters, 'severe')
-                + $alertService->reliableTotalCount($filters, 'critical');
-
         // Build CSV
         $filename = $gasLabel . '_Alerts_' . now()->format('Y-m-d_His') . '.csv';
 
@@ -177,10 +170,14 @@ class GasAlertController extends Controller
             'X-Accel-Buffering'   => 'no',
         ];
 
-        $callback = function () use ($alertService, $filters, $gasLabel, $request, $stateId, $locationId, $totalForMeta) {
+        $callback = function () use ($alertService, $filters, $gasLabel, $request, $stateId, $locationId) {
             $handle = fopen('php://output', 'w');
 
-            // Meta info rows
+            // Meta info rows. Total Records is written as a FOOTER (after all
+            // data rows, once the real count is known) instead of an upfront
+            // estimate — this data is a live, continuously-growing log, and a
+            // large export can take minutes, so any count taken before
+            // streaming would already be stale by the time streaming finishes.
             fputcsv($handle, [$gasLabel . ' Gas Alerts Export']);
             fputcsv($handle, ['Generated:', now()->format('d M Y h:i A')]);
             fputcsv($handle, ['Alert Type:', $request->get('alertType') ?: 'All']);
@@ -188,7 +185,6 @@ class GasAlertController extends Controller
             fputcsv($handle, ['Location ID:', $locationId ?: 'All']);
             fputcsv($handle, ['From Date:', $request->get('fromDate') ?: 'All']);
             fputcsv($handle, ['To Date:', $request->get('toDate') ?: 'All']);
-            fputcsv($handle, ['Total Records:', $totalForMeta]);
             fputcsv($handle, []); // blank row
 
             // Header row
@@ -215,6 +211,9 @@ class GasAlertController extends Controller
                     flush();
                 }
             });
+
+            fputcsv($handle, []); // blank row
+            fputcsv($handle, ['Total Records:', $count]);
 
             fclose($handle);
         };
